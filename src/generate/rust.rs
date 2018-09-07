@@ -281,6 +281,12 @@ impl<'a, 'i, I: ::gll::runtime::Input, T: ?Sized> Clone for Handle<'a, 'i, I, T>
     }
 }
 
+impl<'a, 'i, I: ::gll::runtime::Input, T: ?Sized> PartialEq for Handle<'a, 'i, I, T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.node == other.node
+    }
+}
+
 impl<'a, 'i, I: ::gll::runtime::Input, T: ?Sized> Handle<'a, 'i, I, T> {
     pub fn source(self) -> &'a I::Slice {
         self.parser.input(self.node.range)
@@ -290,23 +296,35 @@ impl<'a, 'i, I: ::gll::runtime::Input, T: ?Sized> Handle<'a, 'i, I, T> {
     }
 }
 
+impl<'a, 'i, I: ::gll::runtime::Input, T> From<Handle<'a, 'i, I, T>> for Handle<'a, 'i, I, Any> {
+    fn from(x: Handle<'a, 'i, I, T>) -> Self {
+        Handle {
+            node: x.node,
+            parser: x.parser,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<'a, 'i, I: ::gll::runtime::Input, T> From<Handle<'a, 'i, I, [T]>> for Handle<'a, 'i, I, Any> {
+    fn from(x: Handle<'a, 'i, I, [T]>) -> Self {
+        Handle {
+            node: x.node,
+            parser: x.parser,
+            _marker: PhantomData,
+        }
+    }
+}
+
 impl<'a, 'i, I: ::gll::runtime::Input, T> From<Ambiguity<Handle<'a, 'i, I, T>>> for Ambiguity<Handle<'a, 'i, I, Any>> {
     fn from(x: Ambiguity<Handle<'a, 'i, I, T>>) -> Self {
-        Ambiguity(Handle {
-            node: x.0.node,
-            parser: x.0.parser,
-            _marker: PhantomData,
-        })
+        Ambiguity(x.0.into())
     }
 }
 
 impl<'a, 'i, I: ::gll::runtime::Input, T> From<Ambiguity<Handle<'a, 'i, I, [T]>>> for Ambiguity<Handle<'a, 'i, I, Any>> {
     fn from(x: Ambiguity<Handle<'a, 'i, I, [T]>>) -> Self {
-        Ambiguity(Handle {
-            node: x.0.node,
-            parser: x.0.parser,
-            _marker: PhantomData,
-        })
+        Ambiguity(x.0.into())
     }
 }
 
@@ -394,7 +412,7 @@ pub enum ListHead<C> {
 }
 
 impl<'a, 'i, I: ::gll::runtime::Input, T> Handle<'a, 'i, I, [T]> {
-    fn one_list_head(self) -> ListHead<Result<(Handle<'a, 'i, I, T>, Handle<'a, 'i, I, [T]>), Ambiguity<Self>>> {
+    pub fn one_list_head(self) -> ListHead<Result<(Handle<'a, 'i, I, T>, Handle<'a, 'i, I, [T]>), Ambiguity<Self>>> {
         match self.all_list_heads() {
             ListHead::Cons(mut iter) => {
                 let first = iter.next().unwrap();
@@ -407,7 +425,7 @@ impl<'a, 'i, I: ::gll::runtime::Input, T> Handle<'a, 'i, I, [T]> {
             ListHead::Nil => ListHead::Nil,
         }
     }
-    fn all_list_heads(mut self) -> ListHead<impl Iterator<Item = (Handle<'a, 'i, I, T>, Handle<'a, 'i, I, [T]>)>> {
+    pub fn all_list_heads(mut self) -> ListHead<impl Iterator<Item = (Handle<'a, 'i, I, T>, Handle<'a, 'i, I, [T]>)>> {
         if let ParseNodeShape::Opt(_) = self.node.kind.shape() {
             if let Some(opt_child) = self.node.unpack_opt() {
                 self.node = opt_child;

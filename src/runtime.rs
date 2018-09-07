@@ -797,9 +797,6 @@ pub mod nd {
         a_iter: A::Iter,
         b_arrow: B,
         b_iter: Option<B::Iter>,
-        // HACK(eddyb) this field is useless (never set to `Some`)
-        // (see `match self.b_iter_backwards` below for more details).
-        b_iter_backwards: Option<B::Iter>,
     }
     impl<A: Arrow, B: Arrow<Input = A::Output>> Iterator for ThenIter<A, B> {
         type Item = B::Output;
@@ -811,13 +808,8 @@ pub mod nd {
                     }
                 }
                 match self.a_iter.next() {
-                    // HACK(eddyb) this never does anything, but without a *second*
-                    // call to `B::Iter::next`, LLVM spends more time optimizing.
                     None => {
-                        return match self.b_iter_backwards {
-                            Some(ref mut b_iter) => b_iter.next(),
-                            None => None,
-                        }
+                        return None;
                     }
                     Some(x) => self.b_iter = Some(self.b_arrow.apply(x)),
                 }
@@ -836,7 +828,6 @@ pub mod nd {
                 a_iter: self.0.apply(x),
                 b_arrow: self.1,
                 b_iter: None,
-                b_iter_backwards: None,
             }
         }
     }

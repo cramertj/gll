@@ -1,0 +1,29 @@
+[package]
+name = "gll-lua"
+version = "0.1.0"
+authors = ["Ana-Maria <mihalacheana.maria@yahoo.com>"]
+repository = "https://github.com/lykenware/gll"
+license = "MIT/Apache-2.0"
+description = "Lua GLL grammar."
+
+[[bin]]
+doc = false
+name = "dump-ast"
+test = false
+
+[[bin]]
+doc = false
+name = "check-luster"
+test = false
+
+[lib]
+doctest = false
+
+[dependencies]
+gll = { path = ".." }
+luster = { git = "https://github.com/kyren/luster" }
+walkdir = "2.2.6"
+
+[build-dependencies]
+gll = { path = ".." }
+
