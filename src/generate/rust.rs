@@ -267,7 +267,7 @@ pub struct Ambiguity<T>(T);
 
 pub struct Handle<'a, 'i: 'a, I: 'a + ::gll::runtime::Input, T: ?Sized> {
     pub node: ParseNode<'i, _P>,
-    pub parser: &'a ::gll::runtime::Parser<'i, _P, _C, I>,
+    pub forest: &'a ::gll::runtime::ParseForest<'i, _P, I>,
     _marker: PhantomData<T>,
 }
 
@@ -281,10 +281,10 @@ impl<'a, 'i, I: ::gll::runtime::Input, T: ?Sized> Clone for Handle<'a, 'i, I, T>
 
 impl<'a, 'i, I: ::gll::runtime::Input, T: ?Sized> Handle<'a, 'i, I, T> {
     pub fn source(self) -> &'a I::Slice {
-        self.parser.sppf.input(self.node.range)
+        self.forest.input(self.node.range)
     }
     pub fn source_info(self) -> I::SourceInfo {
-        self.parser.sppf.source_info(self.node.range)
+        self.forest.source_info(self.node.range)
     }
 }
 
@@ -292,7 +292,7 @@ impl<'a, 'i, I: ::gll::runtime::Input, T> From<Ambiguity<Handle<'a, 'i, I, T>>> 
     fn from(x: Ambiguity<Handle<'a, 'i, I, T>>) -> Self {
         Ambiguity(Handle {
             node: x.0.node,
-            parser: x.0.parser,
+            forest: x.0.forest,
             _marker: PhantomData,
         })
     }
@@ -302,7 +302,7 @@ impl<'a, 'i, I: ::gll::runtime::Input, T> From<Ambiguity<Handle<'a, 'i, I, [T]>>
     fn from(x: Ambiguity<Handle<'a, 'i, I, [T]>>) -> Self {
         Ambiguity(Handle {
             node: x.0.node,
-            parser: x.0.parser,
+            forest: x.0.forest,
             _marker: PhantomData,
         })
     }
@@ -413,16 +413,16 @@ impl<'a, 'i, I: ::gll::runtime::Input, T> Handle<'a, 'i, I, [T]> {
                 return ListHead::Nil;
             }
         }
-        ListHead::Cons(self.parser.sppf.all_splits(self.node).flat_map(move |(elem, rest)| {
+        ListHead::Cons(self.forest.all_splits(self.node).flat_map(move |(elem, rest)| {
             if let ParseNodeShape::Split(..) = rest.kind.shape() {
-                Some(self.parser.sppf.all_splits(rest)).into_iter().flatten().chain(None)
+                Some(self.forest.all_splits(rest)).into_iter().flatten().chain(None)
             } else {
                 None.into_iter().flatten().chain(Some((elem, rest)))
             }
         }).map(move |(elem, rest)| {
             (Handle {
                 node: elem,
-                parser: self.parser,
+                forest: self.forest,
                 _marker: PhantomData,
             }, Handle { node: rest, ..self })
         }))
@@ -486,13 +486,10 @@ pub struct ", name, "<'a, 'i: 'a, I: 'a + ::gll::runtime::Input> {");
             }
             put!("
 
-impl<'a, 'i, I: ::gll::runtime::Input<Slice = ", Pat::rust_slice_ty() ,">> ", name, "<'a, 'i, I> {
+impl<'_a, I: ::gll::runtime::Input<Slice = ", Pat::rust_slice_ty() ,">> ", name, "<'_a, 'static, I> {
     pub fn parse_with<R>(
         input: I,
-        f: impl for<'b, 'i2> FnOnce(
-            &'b ::gll::runtime::Parser<'i2, _P, _C, I>,
-            ParseResult<'b, 'i2, I, ", name, "<'b, 'i2, I>>,
-        ) -> R,
+        f: impl for<'a, 'i> FnOnce(ParseResult<'a, 'i, I, ", name, "<'a, 'i, I>>) -> R,
     ) -> R {
         ::gll::runtime::Parser::with(input, |mut parser, range| {
             let call = Call {
@@ -509,10 +506,15 @@ impl<'a, 'i, I: ::gll::runtime::Input<Slice = ", Pat::rust_slice_ty() ,">> ", na
             );
             parse(&mut parser);
             let result = parser.memoizer.longest_result(call);
-            f(&parser, result.ok_or(ParseError::NoParse).and_then(|range| {
+            let ref forest = {
+                // HACK(eddyb) shrink the scope of `parser` so it drops early
+                let parser = parser;
+                parser.sppf
+            };
+            f(result.ok_or(ParseError::NoParse).and_then(|range| {
                 let handle = Handle {
                     node: ParseNode { kind: ", ParseNodeKind(name.clone()), ", range },
-                    parser: &parser,
+                    forest,
                     _marker: PhantomData,
                 };
                 if range == call.range {
@@ -613,7 +615,7 @@ impl<'a, 'i, I: ::gll::runtime::Input> ", name, "<'a, 'i, I> {");
                     put!("
     #[allow(non_snake_case)]
     fn ", variant, "_from_sppf(
-        parser: &'a ::gll::runtime::Parser<'i, _P, _C, I>,
+        forest: &'a ::gll::runtime::ParseForest<'i, _P, I>,
         _node: ParseNode<'i, _P>,
         _r: traverse!(typeof(ParseNode<'i, _P>) ", rule.generate_traverse_shape(false, &parse_nodes), "),
     ) -> Self {");
@@ -621,7 +623,7 @@ impl<'a, 'i, I: ::gll::runtime::Input> ", name, "<'a, 'i, I> {");
                         put!("
         ", name, "::", variant, "(Handle {
             node: _node,
-            parser,
+            forest,
             _marker: PhantomData,
         })");
                     } else {
@@ -638,7 +640,7 @@ impl<'a, 'i, I: ::gll::runtime::Input> ", name, "<'a, 'i, I> {");
                                 }
                                 put!(").map(|node| Handle {
                 node,
-                parser,
+                forest,
                 _marker: PhantomData,
             }),");
                             } else {
@@ -650,7 +652,7 @@ impl<'a, 'i, I: ::gll::runtime::Input> ", name, "<'a, 'i, I> {");
                                     put!(" .", p);
                                 }
                                 put!(",
-                parser,
+                forest,
                 _marker: PhantomData,
             },");
                             }
@@ -664,7 +666,7 @@ impl<'a, 'i, I: ::gll::runtime::Input> ", name, "<'a, 'i, I> {");
             } else {
                 put!("
     fn from_sppf(
-        parser: &'a ::gll::runtime::Parser<'i, _P, _C, I>,
+        forest: &'a ::gll::runtime::ParseForest<'i, _P, I>,
         _node: ParseNode<'i, _P>,
         _r: traverse!(typeof(ParseNode<'i, _P>) ", rule.rule.generate_traverse_shape(false, &parse_nodes), "),
     ) -> Self {
@@ -682,7 +684,7 @@ impl<'a, 'i, I: ::gll::runtime::Input> ", name, "<'a, 'i, I> {");
                         }
                         put!(".map(|node| Handle {
                 node,
-                parser,
+                forest,
                 _marker: PhantomData,
             }),");
                     } else {
@@ -694,14 +696,14 @@ impl<'a, 'i, I: ::gll::runtime::Input> ", name, "<'a, 'i, I> {");
                             put!(" .", p);
                         }
                     put!(",
-                parser,
+                forest,
                 _marker: PhantomData,
             },");
                     }
                 }
                 if rule.fields.is_empty() {
                     put!("
-            _marker: PhantomData,");
+            _marker: { let _ = forest; PhantomData },");
                 }
                 put!("
         }
@@ -714,7 +716,7 @@ impl<'a, 'i, I: ::gll::runtime::Input> Handle<'a, 'i, I, ", name, "<'a, 'i, I>> 
     pub fn one(self) -> Result<", name, "<'a, 'i, I>, Ambiguity<Self>> {
         // HACK(eddyb) using a closure to catch `Err`s from `?`
         (|| Ok({
-            let sppf = &self.parser.sppf;
+            let sppf = self.forest;
             let node = self.node.unpack_alias();");
                 if let Some(variants) = &variants {
                     put!("
@@ -724,7 +726,7 @@ impl<'a, 'i, I: ::gll::runtime::Input> Handle<'a, 'i, I, ", name, "<'a, 'i, I>> 
                     put!("
                 ", rule.parse_node_kind(&parse_nodes), " => {
                     let r = traverse!(one(sppf, node) ", rule.generate_traverse_shape(false, &parse_nodes), ");
-                    ", name, "::", variant, "_from_sppf(self.parser, node, r)
+                    ", name, "::", variant, "_from_sppf(self.forest, node, r)
                 }");
                 }
                 put!("
@@ -733,13 +735,13 @@ impl<'a, 'i, I: ::gll::runtime::Input> Handle<'a, 'i, I, ", name, "<'a, 'i, I>> 
                 } else {
                 put!("
             let r = traverse!(one(sppf, node) ", rule.rule.generate_traverse_shape(false, &parse_nodes), ");
-            ", name, "::from_sppf(self.parser, node, r)");
+            ", name, "::from_sppf(self.forest, node, r)");
                 }
                 put!("
         }))().map_err(|::gll::runtime::MoreThanOne| Ambiguity(self))
     }
     pub fn all(self) -> impl Iterator<Item = ", name, "<'a, 'i, I>> {
-        let sppf = &self.parser.sppf;
+        let sppf = self.forest;
         let node = self.node.unpack_alias();");
                 if let Some(variants) = &variants {
                     put!("
@@ -768,7 +770,7 @@ impl<'a, 'i, I: ::gll::runtime::Input> Handle<'a, 'i, I, ", name, "<'a, 'i, I>> 
                 ", rule.parse_node_kind(&parse_nodes), " => Iter::_", i, "(
                     traverse!(all(sppf) ", rule.generate_traverse_shape(false, &parse_nodes), ")
                         .apply(node)
-                        .map(move |r| ", name, "::", variant, "_from_sppf(self.parser, node, r))
+                        .map(move |r| ", name, "::", variant, "_from_sppf(self.forest, node, r))
                 ),");
                     }
                     put!("
@@ -779,7 +781,7 @@ impl<'a, 'i, I: ::gll::runtime::Input> Handle<'a, 'i, I, ", name, "<'a, 'i, I>> 
                     put!("
         traverse!(all(sppf) ", rule.rule.generate_traverse_shape(false, &parse_nodes), ")
             .apply(node)
-            .map(move |r| ", name, "::from_sppf(self.parser, node, r))");
+            .map(move |r| ", name, "::from_sppf(self.forest, node, r))");
                 }
                 put!("
     }
@@ -922,7 +924,7 @@ impl<'a, 'i, I: ::gll::runtime::Input> fmt::Debug for Handle<'a, 'i, I, Any> {
                 put!("
             ", kind, " => write!(f, \"{:?}\", Handle::<_, ", ty, "> {
                 node: self.node,
-                parser: self.parser,
+                forest: self.forest,
                 _marker: PhantomData,
             }),");
             }
@@ -930,7 +932,7 @@ impl<'a, 'i, I: ::gll::runtime::Input> fmt::Debug for Handle<'a, 'i, I, Any> {
         put!("
             _ => write!(f, \"{:?}\", Handle::<_, ()> {
                 node: self.node,
-                parser: self.parser,
+                forest: self.forest,
                 _marker: PhantomData,
             }),
         }
@@ -939,7 +941,7 @@ impl<'a, 'i, I: ::gll::runtime::Input> fmt::Debug for Handle<'a, 'i, I, Any> {
 
 #[allow(non_camel_case_types)]
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
-pub enum _C {");
+enum _C {");
         for (name, _) in &self.rules {
             put!("
     ", name, ",");

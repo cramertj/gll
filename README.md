@@ -45,7 +45,7 @@ To parse a string with that grammar:
 use proc_macro2::TokenStream;
 
 let tokens: TokenStream = string.parse().unwrap();
-json_like::Value::parse_with(tokens, |parser, result| {
+json_like::Value::parse_with(tokens, |result| {
     let value = result.unwrap();
     // ...
 });
