@@ -251,15 +251,6 @@ use std::marker::PhantomData;");
         let out_imports = mem::replace(&mut out, String::new());
 
         put!("
-#[derive(Debug)]
-pub enum ParseError<T> {
-    TooShort(T),
-    NoParse,
-}
-
-pub type ParseResult<'a, 'i, I, T> =
-    Result<Handle<'a, 'i, I, T>, ParseError<Handle<'a, 'i, I, T>>>;
-
 pub type Any = dyn any::Any;
 
 #[derive(Debug)]
@@ -489,41 +480,25 @@ pub struct ", name, "<'a, 'i: 'a, I: 'a + ::gll::runtime::Input> {");
 impl<'_a, I: ::gll::runtime::Input<Slice = ", Pat::rust_slice_ty() ,">> ", name, "<'_a, 'static, I> {
     pub fn parse_with<R>(
         input: I,
-        f: impl for<'a, 'i> FnOnce(ParseResult<'a, 'i, I, ", name, "<'a, 'i, I>>) -> R,
+        f: impl for<'a, 'i> FnOnce(::gll::runtime::ParseResult<Handle<'a, 'i, I, ", name, "<'a, 'i, I>>>) -> R,
     ) -> R {
-        ::gll::runtime::Parser::with(input, |mut parser, range| {
-            let call = Call {
-                callee: ", CodeLabel(name.clone()), ",
-                range,
-            };
-            parser.threads.spawn(
-                Continuation {
-                    code: call.callee,
-                    fn_input: call.range,
-                    state: 0,
-                },
-                call.range,
-            );
-            parse(&mut parser);
-            let result = parser.memoizer.longest_result(call);
-            let ref forest = {
-                // HACK(eddyb) shrink the scope of `parser` so it drops early
-                let parser = parser;
-                parser.sppf
-            };
-            f(result.ok_or(ParseError::NoParse).and_then(|range| {
-                let handle = Handle {
-                    node: ParseNode { kind: ", ParseNodeKind(name.clone()), ", range },
+        ::gll::runtime::Parser::parse_with(
+            input,
+            ", CodeLabel(name.clone()), ",
+            ", ParseNodeKind(name.clone()), ",
+            |result| f(match result {
+                Ok((ref forest, node)) => Ok(Handle {
+                    node,
                     forest,
                     _marker: PhantomData,
-                };
-                if range == call.range {
-                    Ok(handle)
-                } else {
-                    Err(ParseError::TooShort(handle))
-                }
-            }))
-        })
+                }),
+                Err(ref err) => Err(err.as_ref_partial().map_partial(|&(ref forest, node)| Handle {
+                    node,
+                    forest,
+                    _marker: PhantomData,
+                })),
+            }),
+        )
     }
 }
 
@@ -788,10 +763,14 @@ impl<'a, 'i, I: ::gll::runtime::Input> Handle<'a, 'i, I, ", name, "<'a, 'i, I>> 
 }");
         }
         put!("
-fn parse<I>(p: &mut ::gll::runtime::Parser<_P, _C, I>)
-where I: ::gll::runtime::Input<Slice = ", Pat::rust_slice_ty() ,">
+impl<I> ::gll::runtime::CodeStep<_P, I> for _C
+    where I: ::gll::runtime::Input<Slice = ", Pat::rust_slice_ty() ,">
 {
-    while let Some(Call { callee: mut c, range: _range }) = p.threads.steal() {
+    fn step<'i>(
+        p: &mut ::gll::runtime::Parser<'i, _P, _C, I>,
+        mut c: ::gll::runtime::Continuation<'i, _C>,
+        _range: ::gll::runtime::Range<'i>,
+    ) {
         match c.code {");
         for (name, rule) in &self.rules {
             let parse_nodes = if rule.fields.is_empty() {
