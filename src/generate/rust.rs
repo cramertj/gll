@@ -256,6 +256,20 @@ pub type Any = dyn any::Any;
 #[derive(Debug)]
 pub struct Ambiguity<T>(T);
 
+pub struct OwnedHandle<I: ::gll::runtime::Input, T: ?Sized> {
+    forest_and_node: ::gll::runtime::OwnedParseForestAndNode<_P, I>,
+    _marker: PhantomData<T>,
+}
+
+impl<I: ::gll::runtime::Input, T: ?Sized> OwnedHandle<I, T> {
+    pub fn source_info(&self) -> I::SourceInfo {
+        self.forest_and_node.unpack_ref(|_, forest_and_node| {
+            let (ref forest, node) = *forest_and_node;
+            forest.source_info(node.range)
+        })
+    }
+}
+
 pub struct Handle<'a, 'i: 'a, I: 'a + ::gll::runtime::Input, T: ?Sized> {
     pub node: ParseNode<'i, _P>,
     pub forest: &'a ::gll::runtime::ParseForest<'i, _P, I>,
@@ -478,27 +492,37 @@ pub struct ", name, "<'a, 'i: 'a, I: 'a + ::gll::runtime::Input> {");
             put!("
 
 impl<'_a, I: ::gll::runtime::Input<Slice = ", Pat::rust_slice_ty() ,">> ", name, "<'_a, 'static, I> {
-    pub fn parse_with<R>(
-        input: I,
-        f: impl for<'a, 'i> FnOnce(::gll::runtime::ParseResult<Handle<'a, 'i, I, ", name, "<'a, 'i, I>>>) -> R,
-    ) -> R {
-        ::gll::runtime::Parser::parse_with(
+    pub fn parse(input: I)
+        -> ::gll::runtime::ParseResult<OwnedHandle<I, ", name, "<'_a, 'static, I>>>
+    {
+        let handle = |forest_and_node| OwnedHandle {
+            forest_and_node,
+            _marker: PhantomData,
+        };
+        ::gll::runtime::Parser::parse(
             input,
             ", CodeLabel(name.clone()), ",
             ", ParseNodeKind(name.clone()), ",
-            |result| f(match result {
-                Ok((ref forest, node)) => Ok(Handle {
-                    node,
-                    forest,
-                    _marker: PhantomData,
-                }),
-                Err(ref err) => Err(err.as_ref_partial().map_partial(|&(ref forest, node)| Handle {
-                    node,
-                    forest,
-                    _marker: PhantomData,
-                })),
-            }),
-        )
+        ).map(handle).map_err(|err| err.map_partial(handle))
+    }
+}
+
+impl<'_a, I: ::gll::runtime::Input> OwnedHandle<I, ", name, "<'_a, 'static, I>> {
+    pub fn with<R>(&self, f: impl for<'a, 'i> FnOnce(Handle<'a, 'i, I, ", name, "<'a, 'i, I>>) -> R) -> R {
+        self.forest_and_node.unpack_ref(|_, forest_and_node| {
+            let (ref forest, node) = *forest_and_node;
+            f(Handle {
+                node,
+                forest,
+                _marker: PhantomData,
+            })
+        })
+    }
+}
+
+impl<'_a, I: ::gll::runtime::Input> fmt::Debug for OwnedHandle<I, ", name, "<'_a, 'static, I>> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.with(|handle| handle.fmt(f))
     }
 }
 
