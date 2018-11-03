@@ -2,7 +2,7 @@ pub use grammar::ParseNodeShape;
 
 use high::{type_lambda, ErasableL, ExistsL, PairL};
 use indexing::container_traits::Trustworthy;
-use indexing::{self, Container};
+use indexing::{self, Container, Index, Unknown};
 use std::cmp::{Ordering, Reverse};
 use std::collections::{BTreeSet, BinaryHeap, HashMap, VecDeque};
 use std::fmt;
@@ -85,6 +85,7 @@ pub trait Input: Sized {
     type Container: Trustworthy;
     type Slice: ?Sized;
     type SourceInfo: fmt::Debug;
+    type SourceInfoPoint: fmt::Debug;
     fn to_container(self) -> Self::Container;
     fn slice<'a, 'i>(
         input: &'a Container<'i, Self::Container>,
@@ -94,12 +95,17 @@ pub trait Input: Sized {
         input: &Container<'i, Self::Container>,
         range: Range<'i>,
     ) -> Self::SourceInfo;
+    fn source_info_point<'i>(
+        input: &Container<'i, Self::Container>,
+        index: Index<'i, Unknown>,
+    ) -> Self::SourceInfoPoint;
 }
 
 impl<'a, T> Input for &'a [T] {
     type Container = Self;
     type Slice = [T];
     type SourceInfo = ops::Range<usize>;
+    type SourceInfoPoint = usize;
     fn to_container(self) -> Self::Container {
         self
     }
@@ -112,12 +118,19 @@ impl<'a, T> Input for &'a [T] {
     fn source_info<'i>(_: &Container<'i, Self::Container>, range: Range<'i>) -> Self::SourceInfo {
         range.as_range()
     }
+    fn source_info_point<'i>(
+        _: &Container<'i, Self::Container>,
+        index: Index<'i, Unknown>,
+    ) -> Self::SourceInfoPoint {
+        index.integer()
+    }
 }
 
 impl<'a> Input for &'a str {
     type Container = &'a ::indexing_str::Str;
     type Slice = str;
     type SourceInfo = LineColumnRange;
+    type SourceInfoPoint = LineColumn;
     fn to_container(self) -> Self::Container {
         self.into()
     }
@@ -131,8 +144,7 @@ impl<'a> Input for &'a str {
         input: &Container<'i, Self::Container>,
         range: Range<'i>,
     ) -> Self::SourceInfo {
-        let prefix_range = Range(input.range().split_at(range.start()).0);
-        let start = LineColumn::count(Self::slice(input, prefix_range));
+        let start = Self::source_info_point(input, range.first());
         // HACK(eddyb) add up `LineColumn`s to avoid counting twice.
         // Ideally we'd cache around a line map, like rustc's `SourceMap`.
         let mut end = LineColumn::count(Self::slice(input, range));
@@ -142,22 +154,29 @@ impl<'a> Input for &'a str {
         }
         LineColumnRange { start, end }
     }
+    fn source_info_point<'i>(
+        input: &Container<'i, Self::Container>,
+        index: Index<'i, Unknown>,
+    ) -> Self::SourceInfoPoint {
+        let prefix_range = Range(input.split_at(index).0);
+        LineColumn::count(Self::slice(input, prefix_range))
+    }
 }
 
 pub trait InputMatch<Pat> {
-    fn match_left(&self, pat: Pat) -> Option<usize>;
-    fn match_right(&self, pat: Pat) -> Option<usize>;
+    fn match_left(&self, pat: &'static Pat) -> Option<usize>;
+    fn match_right(&self, pat: &'static Pat) -> Option<usize>;
 }
 
-impl<'a, T: PartialEq> InputMatch<&'a [T]> for [T] {
-    fn match_left(&self, pat: &[T]) -> Option<usize> {
+impl<T: PartialEq> InputMatch<&'static [T]> for [T] {
+    fn match_left(&self, pat: &&[T]) -> Option<usize> {
         if self.starts_with(pat) {
             Some(pat.len())
         } else {
             None
         }
     }
-    fn match_right(&self, pat: &[T]) -> Option<usize> {
+    fn match_right(&self, pat: &&[T]) -> Option<usize> {
         if self.ends_with(pat) {
             Some(pat.len())
         } else {
@@ -167,7 +186,7 @@ impl<'a, T: PartialEq> InputMatch<&'a [T]> for [T] {
 }
 
 impl<T: PartialOrd> InputMatch<RangeInclusive<T>> for [T] {
-    fn match_left(&self, pat: RangeInclusive<T>) -> Option<usize> {
+    fn match_left(&self, pat: &RangeInclusive<T>) -> Option<usize> {
         let x = self.first()?;
         if pat.start() <= x && x <= pat.end() {
             Some(1)
@@ -175,7 +194,7 @@ impl<T: PartialOrd> InputMatch<RangeInclusive<T>> for [T] {
             None
         }
     }
-    fn match_right(&self, pat: RangeInclusive<T>) -> Option<usize> {
+    fn match_right(&self, pat: &RangeInclusive<T>) -> Option<usize> {
         let x = self.last()?;
         if pat.start() <= x && x <= pat.end() {
             Some(1)
@@ -185,15 +204,15 @@ impl<T: PartialOrd> InputMatch<RangeInclusive<T>> for [T] {
     }
 }
 
-impl<'a> InputMatch<&'a str> for str {
-    fn match_left(&self, pat: &str) -> Option<usize> {
+impl InputMatch<&'static str> for str {
+    fn match_left(&self, pat: &&str) -> Option<usize> {
         if self.starts_with(pat) {
             Some(pat.len())
         } else {
             None
         }
     }
-    fn match_right(&self, pat: &str) -> Option<usize> {
+    fn match_right(&self, pat: &&str) -> Option<usize> {
         if self.ends_with(pat) {
             Some(pat.len())
         } else {
@@ -203,7 +222,7 @@ impl<'a> InputMatch<&'a str> for str {
 }
 
 impl InputMatch<RangeInclusive<char>> for str {
-    fn match_left(&self, pat: RangeInclusive<char>) -> Option<usize> {
+    fn match_left(&self, pat: &RangeInclusive<char>) -> Option<usize> {
         let c = self.chars().next()?;
         if *pat.start() <= c && c <= *pat.end() {
             Some(c.len_utf8())
@@ -211,7 +230,7 @@ impl InputMatch<RangeInclusive<char>> for str {
             None
         }
     }
-    fn match_right(&self, pat: RangeInclusive<char>) -> Option<usize> {
+    fn match_right(&self, pat: &RangeInclusive<char>) -> Option<usize> {
         let c = self.chars().rev().next()?;
         if *pat.start() <= c && c <= *pat.end() {
             Some(c.len_utf8())
@@ -226,23 +245,33 @@ pub struct Parser<'i, P: ParseNodeKind, C: CodeLabel, I: Input> {
     gss: GraphStack<'i, C>,
     memoizer: Memoizer<'i, C>,
     sppf: ParseForest<'i, P, I>,
+    last_input_pos: Index<'i, Unknown>,
+    expected_pats: Vec<&'static dyn fmt::Debug>,
 }
 
 #[derive(Debug)]
-pub struct ParseError<T> {
+pub struct ParseError<A, T> {
     pub partial: Option<T>,
+    pub at: A,
+    pub expected: Vec<&'static dyn fmt::Debug>,
 }
 
-impl<T> ParseError<T> {
-    pub fn map_partial<U>(self, f: impl FnOnce(T) -> U) -> ParseError<U> {
-        let ParseError { partial } = self;
+impl<A, T> ParseError<A, T> {
+    pub fn map_partial<U>(self, f: impl FnOnce(T) -> U) -> ParseError<A, U> {
+        let ParseError {
+            partial,
+            at,
+            expected,
+        } = self;
         ParseError {
             partial: partial.map(f),
+            at,
+            expected,
         }
     }
 }
 
-pub type ParseResult<T> = Result<T, ParseError<T>>;
+pub type ParseResult<A, T> = Result<T, ParseError<A, T>>;
 
 type_lambda! {
     pub type<'i> ParseForestL<P: ParseNodeKind, I: Input> = ParseForest<'i, P, I>;
@@ -252,7 +281,11 @@ type_lambda! {
 pub type OwnedParseForestAndNode<P, I> = ExistsL<PairL<ParseForestL<P, I>, ParseNodeL<P>>>;
 
 impl<'i, P: ParseNodeKind, C: CodeStep<P, I>, I: Input> Parser<'i, P, C, I> {
-    pub fn parse(input: I, callee: C, kind: P) -> ParseResult<OwnedParseForestAndNode<P, I>> {
+    pub fn parse(
+        input: I,
+        callee: C,
+        kind: P,
+    ) -> ParseResult<I::SourceInfoPoint, OwnedParseForestAndNode<P, I>> {
         ErasableL::indexing_scope(input.to_container(), |lifetime, input| {
             let call = Call {
                 callee,
@@ -273,6 +306,8 @@ impl<'i, P: ParseNodeKind, C: CodeStep<P, I>, I: Input> Parser<'i, P, C, I> {
                     input,
                     possibilities: HashMap::new(),
                 },
+                last_input_pos: call.range.first(),
+                expected_pats: vec![],
             };
 
             // Start with one thread, at the provided entry-point.
@@ -293,10 +328,14 @@ impl<'i, P: ParseNodeKind, C: CodeStep<P, I>, I: Input> Parser<'i, P, C, I> {
             // If the function call we started with ever returned,
             // we will find an entry for it in the memoizer, from
             // which we pick the longest match, which is only a
-            // successful parse *only if* it's as long as the input.
-            // FIXME(eddyb) actually record information about errors
+            // successful parse if it's as long as the input.
+            let mut error = ParseError {
+                partial: None,
+                at: I::source_info_point(&parser.sppf.input, parser.last_input_pos),
+                expected: parser.expected_pats,
+            };
             match parser.memoizer.longest_result(call) {
-                None => Err(ParseError { partial: None }),
+                None => Err(error),
                 Some(range) => {
                     let result = OwnedParseForestAndNode::pack(
                         lifetime,
@@ -306,26 +345,46 @@ impl<'i, P: ParseNodeKind, C: CodeStep<P, I>, I: Input> Parser<'i, P, C, I> {
                     if range == call.range {
                         Ok(result)
                     } else {
-                        Err(ParseError {
-                            partial: Some(result),
-                        })
+                        error.partial = Some(result);
+                        Err(error)
                     }
                 }
             }
         })
     }
 
-    pub fn input_consume_left<Pat>(&self, range: Range<'i>, pat: Pat) -> Option<Range<'i>>
+    pub fn input_consume_left<Pat: fmt::Debug>(
+        &mut self,
+        range: Range<'i>,
+        pat: &'static Pat,
+    ) -> Option<Range<'i>>
     where
         I::Slice: InputMatch<Pat>,
     {
-        self.sppf
-            .input(range)
-            .match_left(pat)
-            .map(|n| Range(range.split_at(n).1))
+        let start = range.first();
+        if start > self.last_input_pos {
+            self.last_input_pos = start;
+            self.expected_pats.clear();
+        }
+        match self.sppf.input(range).match_left(pat) {
+            Some(n) => {
+                let after = Range(range.split_at(n).1);
+                if n > 0 {
+                    self.last_input_pos = after.first();
+                    self.expected_pats.clear();
+                }
+                Some(after)
+            }
+            None => {
+                if start == self.last_input_pos {
+                    self.expected_pats.push(pat);
+                }
+                None
+            }
+        }
     }
 
-    pub fn input_consume_right<Pat>(&self, range: Range<'i>, pat: Pat) -> Option<Range<'i>>
+    pub fn input_consume_right<Pat>(&self, range: Range<'i>, pat: &'static Pat) -> Option<Range<'i>>
     where
         I::Slice: InputMatch<Pat>,
     {

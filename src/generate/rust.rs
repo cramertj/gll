@@ -493,7 +493,10 @@ pub struct ", name, "<'a, 'i: 'a, I: 'a + ::gll::runtime::Input> {");
 
 impl<'_a, I: ::gll::runtime::Input<Slice = ", Pat::rust_slice_ty() ,">> ", name, "<'_a, 'static, I> {
     pub fn parse(input: I)
-        -> ::gll::runtime::ParseResult<OwnedHandle<I, ", name, "<'_a, 'static, I>>>
+        -> Result<
+            OwnedHandle<I, ", name, "<'_a, 'static, I>>,
+            ::gll::runtime::ParseError<I::SourceInfoPoint, I::SourceInfo>,
+        >
     {
         let handle = |forest_and_node| OwnedHandle {
             forest_and_node,
@@ -503,7 +506,7 @@ impl<'_a, I: ::gll::runtime::Input<Slice = ", Pat::rust_slice_ty() ,">> ", name,
             input,
             ", CodeLabel(name.clone()), ",
             ", ParseNodeKind(name.clone()), ",
-        ).map(handle).map_err(|err| err.map_partial(handle))
+        ).map(handle).map_err(|err| err.map_partial(|x| handle(x).source_info()))
     }
 }
 
@@ -1353,13 +1356,13 @@ impl<Pat: Ord + Hash + RustInputPat> Rc<Rule<Pat>> {
             (Rule::Empty, _) => cont,
             (Rule::Eat(pat), _) => {
                 // HACK(eddyb) remove extra variables post-NLL
-                let code = format!("let Some(_range) = p.input_consume_left(_range, {})", pat.rust_matcher());
+                let code = format!("let Some(_range) = p.input_consume_left(_range, &({}))", pat.rust_matcher());
                 let cont = check(&code).apply(cont);
                 cont
             }
             (Rule::NegativeLookahead(pat), _) => {
                 // HACK(eddyb) remove extra variables post-NLL
-                let code = format!("p.input_consume_left(_range, {}).is_none()", pat.rust_matcher());
+                let code = format!("p.input_consume_left(_range, &({})).is_none()", pat.rust_matcher());
                 let cont = check(&code).apply(cont);
                 cont
             }

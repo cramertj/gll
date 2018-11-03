@@ -1,6 +1,6 @@
 use generate::rust::RustInputPat;
 use grammar::{self, call, eat, MatchesEmpty, MaybeKnown};
-use indexing::Container;
+use indexing::{proof::Provable, Container, Index, Unknown};
 pub use proc_macro2::{
     Delimiter, Ident, LexError, Literal, Punct, Spacing, Span, TokenStream, TokenTree,
 };
@@ -86,7 +86,7 @@ impl RustInputPat for Pat {
         for pat in &self.0 {
             write!(out, "::gll::proc_macro::FlatTokenPat::{:?},", pat).unwrap();
         }
-        write!(out, "]").unwrap();
+        write!(out, "] as &[_]").unwrap();
         out
     }
 }
@@ -192,6 +192,7 @@ impl Input for TokenStream {
     type Container = Vec<FlatToken>;
     type Slice = [FlatToken];
     type SourceInfo = ops::Range<Span>;
+    type SourceInfoPoint = Span;
     fn to_container(self) -> Self::Container {
         let mut out = vec![];
         flatten(self, &mut out);
@@ -207,29 +208,37 @@ impl Input for TokenStream {
         input: &Container<'i, Self::Container>,
         range: Range<'i>,
     ) -> Self::SourceInfo {
+        // FIXME(eddyb) should be joining up spans, but the API
+        // for that is still "semver-exempt" in `proc-macro2`.
+        let last = range
+            .nonempty()
+            .map(|r| r.last().no_proof())
+            .unwrap_or(range.past_the_end());
+        Self::source_info_point(input, range.first())..Self::source_info_point(input, last)
+    }
+    fn source_info_point<'i>(
+        input: &Container<'i, Self::Container>,
+        index: Index<'i, Unknown>,
+    ) -> Self::SourceInfoPoint {
         // Try to get as much information as possible.
-        let (before_start, after_start, _) = input.range().split_at(range.start());
-        let before_start = &input[before_start];
-        let after_start = &input[after_start];
-        if let Some(first) = after_start.first() {
-            // FIXME(eddyb) should be joining up spans, but the API
-            // for that is still "semver-exempt" in `proc-macro2`.
-            first.span()..input[range.0].last().unwrap_or(first).span()
-        } else if let Some(last) = before_start.last() {
+        let (before, after) = input.split_at(index);
+        let before = &input[before];
+        let after = &input[after];
+        if let Some(first) = after.first() {
+            first.span()
+        } else if let Some(last) = before.last() {
             // Not correct but we're at the end of the input anyway.
-            let span = last.span();
-            span..span
+            last.span()
         } else {
             // HACK(eddyb) last resort, make a span up
             // (a better option should exist)
-            let span = Span::call_site();
-            span..span
+            Span::call_site()
         }
     }
 }
 
-impl<'a> InputMatch<&'a [FlatTokenPat<&'a str>]> for [FlatToken] {
-    fn match_left(&self, pat: &[FlatTokenPat<&str>]) -> Option<usize> {
+impl InputMatch<&'static [FlatTokenPat<&'static str>]> for [FlatToken] {
+    fn match_left(&self, &pat: &&[FlatTokenPat<&str>]) -> Option<usize> {
         if self
             .iter()
             .zip(pat)
@@ -242,7 +251,7 @@ impl<'a> InputMatch<&'a [FlatTokenPat<&'a str>]> for [FlatToken] {
             None
         }
     }
-    fn match_right(&self, pat: &[FlatTokenPat<&str>]) -> Option<usize> {
+    fn match_right(&self, &pat: &&[FlatTokenPat<&str>]) -> Option<usize> {
         if self
             .iter()
             .zip(pat)
