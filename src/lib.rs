@@ -4,7 +4,9 @@ extern crate indexing;
 extern crate ordermap;
 extern crate proc_macro2;
 
-// NOTE only this module can and does contain unsafe code.
+// NOTE only these two modules can and do contain unsafe code.
+#[allow(unsafe_code)]
+mod high;
 #[allow(unsafe_code)]
 mod indexing_str;
 
