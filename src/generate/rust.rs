@@ -154,12 +154,10 @@ impl<Pat: Ord + Hash + RustInputPat> Rc<Rule<Pat>> {
                 sep.parse_node_kind(parse_nodes).0
             )),
         };
-        assert!(
-            parse_nodes
-                .borrow_mut()
-                .insert(self.clone(), (kind.clone(), None))
-                .is_none()
-        );
+        assert!(parse_nodes
+            .borrow_mut()
+            .insert(self.clone(), (kind.clone(), None))
+            .is_none());
         kind
     }
 
@@ -1152,18 +1150,19 @@ macro_rules! thunk {
 }
 
 fn pop_state<F: ContFn>(f: impl FnOnce(&str) -> Thunk<F>) -> Thunk<impl ContFn> {
-    f("c.state") + Thunk::new(|mut cont| {
-        if let Some(&None) = cont.nested_frames.last() {
-            *cont.nested_frames.last_mut().unwrap() =
-                Some((cont.to_label().clone(), cont.fn_code_label.clone()));
-            *cont.fn_code_label = cont.next_code_label();
-            cont.code_labels.insert(cont.fn_code_label.clone(), 0);
-            cont.code = Code::Inline(String::new());
-            cont = ret().apply(cont);
-        }
-        cont.nested_frames.push(None);
-        cont
-    })
+    f("c.state")
+        + Thunk::new(|mut cont| {
+            if let Some(&None) = cont.nested_frames.last() {
+                *cont.nested_frames.last_mut().unwrap() =
+                    Some((cont.to_label().clone(), cont.fn_code_label.clone()));
+                *cont.fn_code_label = cont.next_code_label();
+                cont.code_labels.insert(cont.fn_code_label.clone(), 0);
+                cont.code = Code::Inline(String::new());
+                cont = ret().apply(cont);
+            }
+            cont.nested_frames.push(None);
+            cont
+        })
 }
 
 fn push_state(state: &str) -> Thunk<impl ContFn> {
@@ -1481,9 +1480,10 @@ impl<Pat: Ord + Hash + RustInputPat> Rule<Pat> {
                         i,
                         rule.parse_node_kind(parse_nodes),
                         rule.generate_traverse_shape(true, parse_nodes)
-                    );
+                    )
+                    .unwrap();
                 }
-                write!(s, " }}");
+                write!(s, " }}").unwrap();
                 s
             }
             Rule::Opt(rule) => format!("[{}]", rule.generate_traverse_shape(true, parse_nodes)),
